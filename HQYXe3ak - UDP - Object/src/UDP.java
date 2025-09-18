@@ -1,194 +1,101 @@
-import java.io.*;
-import java.net.*;
-import java.util.Locale;
+import javax.swing.*;
+import java.awt.*;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.net.Socket;
 
-// Lớp Customer
-class Customer implements Serializable {
-    private static final long serialVersionUID = 20151107L;
+public class UDP extends JFrame {
+    private JTextField txtMSV;
+    private JTextField txtQCode;
+    private JTextArea txtOutput;
+    private JButton btnConnect;
 
-    String id;
-    String code;
-    String name;
-    String dayOfBirth;
-    String userName;
+    public UDP() {
+        setTitle("TCP Client - Sum Numbers");
+        setSize(500, 300);
+        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setLocationRelativeTo(null);
 
-    public Customer(String id, String code, String name, String dayOfBirth, String userName) {
-        this.id = id;
-        this.code = code;
-        this.name = name;
-        this.dayOfBirth = dayOfBirth;
-        this.userName = userName;
+        // Panel nhập thông tin
+        JPanel inputPanel = new JPanel(new GridLayout(2, 2, 5, 5));
+        inputPanel.add(new JLabel("Mã SV:"));
+        txtMSV = new JTextField("B22DCVT034");
+        inputPanel.add(txtMSV);
+
+        inputPanel.add(new JLabel("QCode:"));
+        txtQCode = new JTextField("1MdSxrzp");
+        inputPanel.add(txtQCode);
+
+        // Nút kết nối
+        btnConnect = new JButton("Kết nối & Xử lý");
+        btnConnect.addActionListener(e -> connectAndProcess());
+
+        // Output hiển thị kết quả
+        txtOutput = new JTextArea();
+        txtOutput.setEditable(false);
+        JScrollPane scrollPane = new JScrollPane(txtOutput);
+
+        // Layout
+        add(inputPanel, BorderLayout.NORTH);
+        add(btnConnect, BorderLayout.CENTER);
+        add(scrollPane, BorderLayout.SOUTH);
     }
 
-    @Override
-    public String toString() {
-        return "Customer{id='" + id + "', code='" + code + "', name='" + name + "', dayOfBirth='" + dayOfBirth + "', userName='" + userName + "'}";
-    }
-}
+    private void connectAndProcess() {
+        String serverAddress = "203.162.10.109";
+        int port = 2206;
+        String msv = txtMSV.getText().trim();
+        String qCode = txtQCode.getText().trim();
 
-// Server UDP
-class UDPServer implements Runnable {
-    @Override
-    public void run() {
-        try (DatagramSocket serverSocket = new DatagramSocket(2209)) {
-            System.out.println("UDP Server running on port 2209...");
+        try (Socket socket = new Socket(serverAddress, port)) {
+            socket.setSoTimeout(5000);
 
-            // Nhận yêu cầu ban đầu
-            byte[] receiveData = new byte[1024];
-            DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
-            serverSocket.receive(receivePacket);
+            InputStream in = socket.getInputStream();
+            OutputStream out = socket.getOutputStream();
 
-            String request = new String(receivePacket.getData(), 0, receivePacket.getLength());
-            System.out.println("Server received request: " + request);
+            // a. Gửi mã sinh viên và mã câu hỏi
+            String request = msv + ";" + qCode + "\n";
+            out.write(request.getBytes());
+            out.flush();
+            txtOutput.append("Sent: " + request.trim() + "\n");
 
-            // Tạo Customer mặc định với tên "tran duc anh"
-            Customer c = new Customer("C001", "KH123", "tran duc anh", "10-11-2012", "");
+            // b. Nhận dữ liệu từ server
+            byte[] buffer = new byte[1024];
+            int bytesRead = in.read(buffer);
+            if (bytesRead == -1) {
+                txtOutput.append("Không nhận được dữ liệu từ server!\n");
+                return;
+            }
+            String response = new String(buffer, 0, bytesRead).trim();
+            txtOutput.append("From server: " + response + "\n");
 
-            // Chuẩn bị dữ liệu để gửi lại
-            String requestId = "REQ12345"; // 8 bytes
-            byte[] customerBytes = serialize(c);
+            // c. Tính tổng
+            String[] parts = response.split("\\|");
+            int s = 0;
+            for (String p : parts) {
+                s += Integer.parseInt(p.trim());
+            }
 
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            baos.write(requestId.getBytes(), 0, 8); // 8 byte đầu
-            baos.write(customerBytes);              // object
-            byte[] sendData = baos.toByteArray();
+            // d. Gửi tổng về server
+            String result = s + "\n";
+            out.write(result.getBytes());
+            out.flush();
+            txtOutput.append("Sent: " + s + "\n");
 
-            // Gửi về client
-            InetAddress clientAddress = receivePacket.getAddress();
-            int clientPort = receivePacket.getPort();
-            DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, clientAddress, clientPort);
-            serverSocket.send(sendPacket);
+            in.close();
+            out.close();
+            socket.close();
+            txtOutput.append("End program\n");
 
-            // Nhận lại Customer đã sửa đổi
-            byte[] buffer2 = new byte[4096];
-            DatagramPacket modifiedPacket = new DatagramPacket(buffer2, buffer2.length);
-            serverSocket.receive(modifiedPacket);
-
-            // Parse dữ liệu
-            byte[] data = modifiedPacket.getData();
-            String reqIdBack = new String(data, 0, 8);
-            Customer modifiedCustomer = (Customer) deserialize(data, 8, modifiedPacket.getLength() - 8);
-
-            System.out.println("Server received modified object:");
-            System.out.println("ReqId=" + reqIdBack + ", Customer=" + modifiedCustomer);
-
-        } catch (Exception e) {
-            e.printStackTrace();
+        } catch (Exception ex) {
+            txtOutput.append("Error: " + ex.getMessage() + "\n");
         }
     }
 
-    // Serialize
-    private static byte[] serialize(Object obj) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ObjectOutputStream out = new ObjectOutputStream(baos);
-        out.writeObject(obj);
-        return baos.toByteArray();
-    }
-
-    // Deserialize
-    private static Object deserialize(byte[] data, int offset, int length) throws IOException, ClassNotFoundException {
-        ByteArrayInputStream bais = new ByteArrayInputStream(data, offset, length);
-        ObjectInputStream in = new ObjectInputStream(bais);
-        return in.readObject();
-    }
-}
-
-// Client UDP
-class UDPClient {
-    public void runClient() {
-        try (DatagramSocket clientSocket = new DatagramSocket()) {
-            InetAddress IPAddress = InetAddress.getLocalHost();
-
-            // Gửi request đầu tiên với MSV B22DCVT034
-            String studentCode = "B22DCVT034";
-            String qCode = "HQYXe3ak";
-            String request = ";" + studentCode + ";" + qCode;
-            byte[] sendData = request.getBytes();
-            DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, IPAddress, 2209);
-            clientSocket.send(sendPacket);
-
-            // Nhận Customer từ server
-            byte[] receiveData = new byte[4096];
-            DatagramPacket receivePacket = new DatagramPacket(receiveData, receiveData.length);
-            clientSocket.receive(receivePacket);
-
-            byte[] data = receivePacket.getData();
-            String requestId = new String(data, 0, 8);
-            Customer c = (Customer) deserialize(data, 8, receivePacket.getLength() - 8);
-
-            System.out.println("Client received object: " + c);
-
-            // === Chỉnh sửa dữ liệu ===
-            // 1. Chuẩn hóa tên: "tran duc anh" -> "ANH, Tran Duc"
-            String[] parts = c.name.trim().split("\\s+");
-            String lastName = parts[parts.length - 1].toUpperCase(Locale.ROOT);
-            String firstNames = "";
-            for (int i = 0; i < parts.length - 1; i++) {
-                firstNames += capitalize(parts[i]) + " ";
-            }
-            c.name = lastName + ", " + firstNames.trim();
-
-            // 2. Đổi ngày sinh mm-dd-yyyy -> dd/mm/yyyy
-            String[] dobParts = c.dayOfBirth.split("-");
-            if (dobParts.length == 3) {
-                c.dayOfBirth = dobParts[1] + "/" + dobParts[0] + "/" + dobParts[2];
-            }
-
-            // 3. Sinh username: tda + anh = tdanh
-            StringBuilder uname = new StringBuilder();
-            for (int i = 0; i < parts.length - 1; i++) {
-                uname.append(parts[i].charAt(0));
-            }
-            uname.append(parts[parts.length - 1]);
-            c.userName = uname.toString().toLowerCase(Locale.ROOT);
-
-            // Gửi lại Customer đã chỉnh sửa
-            byte[] objBytes = serialize(c);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            baos.write(requestId.getBytes(), 0, 8);
-            baos.write(objBytes);
-            byte[] sendBack = baos.toByteArray();
-
-            DatagramPacket modifiedPacket = new DatagramPacket(sendBack, sendBack.length, IPAddress, 2209);
-            clientSocket.send(modifiedPacket);
-
-            System.out.println("Client sent modified object: " + c);
-
-        } catch (Exception e) {
-            e.printStackTrace();
-        }
-    }
-
-    private static String capitalize(String s) {
-        if (s == null || s.isEmpty()) return s;
-        return s.substring(0, 1).toUpperCase(Locale.ROOT) + s.substring(1).toLowerCase(Locale.ROOT);
-    }
-
-    private static byte[] serialize(Object obj) throws IOException {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        ObjectOutputStream out = new ObjectOutputStream(baos);
-        out.writeObject(obj);
-        return baos.toByteArray();
-    }
-
-    private static Object deserialize(byte[] data, int offset, int length) throws IOException, ClassNotFoundException {
-        ByteArrayInputStream bais = new ByteArrayInputStream(data, offset, length);
-        ObjectInputStream in = new ObjectInputStream(bais);
-        return in.readObject();
-    }
-}
-
-// Main chạy thử
-public class UDP {
     public static void main(String[] args) {
-        // Chạy server trong 1 thread riêng
-        new Thread(new UDPServer()).start();
-
-        // Cho server khởi động trước một chút
-        try { Thread.sleep(1000); } catch (InterruptedException e) { }
-
-        // Chạy client
-        UDPClient client = new UDPClient();
-        client.runClient();
+        SwingUtilities.invokeLater(() -> {
+            UDP client = new UDP();
+            client.setVisible(true);
+        });
     }
 }
